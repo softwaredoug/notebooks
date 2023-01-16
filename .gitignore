@@ -1,4 +1,5 @@
 data/
+tmdb/tmdb/
 **/data
 venv/*
 **/.ipynb_checkpoints

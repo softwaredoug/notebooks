@@ -1,8 +1,10 @@
 import numpy as np
+import math
 import pickle
 from time import perf_counter
 from pyroaring import BitMap
-from pympler import asizeof
+from project import project
+# from pympler import asizeof
 # All data - quite large for the entire set
 # can be downlloaded from
 # https://www.kaggle.com/datasets/softwaredoug/wikipedia-sentences-all-minilm-l6-v2
@@ -37,10 +39,8 @@ def centroid(vects):
 
 
 def most_similar(vects, centroid, floor):
-
     nn = np.dot(vects, centroid)
-    idx_above_thresh = np.argwhere(nn >= floor)[:, 0].sort()
-    import pdb; pdb.set_trace()
+    idx_above_thresh = np.sort(np.argwhere(nn >= floor)[:, 0])
     return list(zip(idx_above_thresh, nn[idx_above_thresh]))
 
 
@@ -58,11 +58,19 @@ class Weights:
         """Append with increasing row and col values."""
         assert row >= len(self.rows) - 1
         if row > len(self.rows) - 1:
-            self.rows.append(len(self.data))
+            self.rows.append(self.size)
         if self.size == len(self.data):
             self.data = np.append(self.data, self._get_buffer())
         self.data[self.size] = value
         self.size += 1
+
+    def weights_of(self, row):
+        begin = self.rows[row]
+        end = None
+        if row + 1 < len(self.rows):
+            end = self.rows[row+1]
+        weights = self.data[begin:end]
+        return weights
 
 
 class RefsIndex:
@@ -71,6 +79,55 @@ class RefsIndex:
         self.refs = refs
         self.neighbors = neighbors
         self.weights = weights
+
+    def weights_of(self, ref):
+        weights = self.weights.weights_of(ref)
+        cols = self.neighbors[ref]
+        if len(weights[len(cols):]) > 0:
+            assert (weights[len(cols):] == 0.0).all()
+        weights = weights[:len(cols)]
+        return dict(zip(self.neighbors[ref], weights))
+
+    def search(self, query_vector, ref_points=100, at=10, reweight=True):
+        # query vect -> refs similarity
+        nn = np.dot(self.refs, query_vector)
+
+        top_n_ref_points = np.argpartition(-nn, ref_points)[:ref_points]
+        scored = nn[top_n_ref_points]
+
+        # Top ref candidates via our index
+        candidates = {}
+        sin_theta = 1.0
+        cutoff = 0.0
+        refs_so_far = []
+        for ref_ord, ref_score in zip(top_n_ref_points, scored):
+            sin_theta = 1.0
+            if len(refs_so_far) > 0 and reweight:
+                refs_span = np.vstack(refs_so_far)
+                proj = project(self.refs[ref_ord], refs_span)
+                dot = np.dot(proj, self.refs[ref_ord])
+                angle = math.acos(dot)
+                sin_theta = math.sin(angle)
+                print(sin_theta)
+
+            for vect_id, score in self.weights_of(ref_ord).items():
+                combined = score * ref_score * sin_theta
+                if combined > cutoff:
+                    try:
+                        candidates[vect_id].append(combined)
+                    except KeyError:
+                        candidates[vect_id] = [combined]
+
+            refs_so_far.append(self.refs[ref_ord])
+
+        summed_candidates = {}
+        for vect_id, scored in candidates.items():
+            summed_candidates[vect_id] = sum(scored)
+
+        results = summed_candidates.items()
+        return sorted(results,
+                      key=lambda scored: scored[1],
+                      reverse=True)[:at]
 
 
 def build_index(vects, num_refs=5):
@@ -84,7 +141,7 @@ def build_index(vects, num_refs=5):
     start = perf_counter()
 
     for ref_ord in range(0, num_refs):
-        specificity = 0.12
+        specificity = 0.10
 
         center = centroid(vects)
         top_n = most_similar(vects, center, specificity)
@@ -102,16 +159,18 @@ def build_index(vects, num_refs=5):
             print(ref_ord, len(ref_neighbors[ref_ord]),
                   len(all_indexed_vectors) / len(vects),
                   perf_counter() - start)
-        if ref_ord % 200 == 0:
-            print('W mem ', asizeof.asized(ref_weights, detail=1).format())
-            print('N mem ', asizeof.asized(ref_neighbors, detail=1).format())
 
     return RefsIndex(refs, ref_neighbors, ref_weights)
 
 
+def load_index(filename='index.pkl'):
+    with open('index.pkl', 'rb') as f:
+        return pickle.load(f)
+
+
 def main():
     sentences, vects = load_sentences()
-    refs_index = build_index(vects, num_refs=8000)
+    refs_index = build_index(vects, num_refs=10000)
     with open('index.pkl', 'wb') as f:
         pickle.dump(refs_index, f)
 

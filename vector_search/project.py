@@ -8,6 +8,7 @@ def project_one(v, u):
 
 
 def project(v, A):
+    """Get projection of v onto row vectors in A."""
     Q, R = np.linalg.qr(A.T)
     v = v / np.linalg.norm(v)
     projection = []

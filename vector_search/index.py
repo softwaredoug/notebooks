@@ -1,9 +1,11 @@
 import numpy as np
 import math
 import pickle
+from sys import argv
 from time import perf_counter
 from pyroaring import BitMap
 from project import project
+from weights import WeightsArray
 # from pympler import asizeof
 # All data - quite large for the entire set
 # can be downlloaded from
@@ -44,41 +46,22 @@ def most_similar(vects, centroid, floor):
     return list(zip(idx_above_thresh, nn[idx_above_thresh]))
 
 
-class Weights:
-
-    def __init__(self):
-        self.rows = []
-        self.size = 0
-        self.data = self._get_buffer()
-
-    def _get_buffer(self):
-        return np.zeros(1000, dtype=np.float32)
-
-    def append(self, row, value):
-        """Append with increasing row and col values."""
-        assert row >= len(self.rows) - 1
-        if row > len(self.rows) - 1:
-            self.rows.append(self.size)
-        if self.size == len(self.data):
-            self.data = np.append(self.data, self._get_buffer())
-        self.data[self.size] = value
-        self.size += 1
-
-    def weights_of(self, row):
-        begin = self.rows[row]
-        end = None
-        if row + 1 < len(self.rows):
-            end = self.rows[row+1]
-        weights = self.data[begin:end]
-        return weights
-
-
 class RefsIndex:
 
     def __init__(self, refs, neighbors, weights):
         self.refs = refs
         self.neighbors = neighbors
         self.weights = weights
+
+    def merge(self, other):
+        self.weights.merge(other.weights)
+
+        refs_appended = np.append(self.refs, other.refs, axis=0)
+        self.refs = refs_appended
+
+        start_row = len(self.neighbors)
+        for ref_idx, neighbors in other.neighbors.items():
+            self.neighbors[ref_idx + start_row] = neighbors
 
     def weights_of(self, ref):
         weights = self.weights.weights_of(ref)
@@ -108,7 +91,6 @@ class RefsIndex:
                 dot = np.dot(proj, self.refs[ref_ord])
                 angle = math.acos(dot)
                 sin_theta = math.sin(angle)
-                print(sin_theta)
 
             for vect_id, score in self.weights_of(ref_ord).items():
                 combined = score * ref_score * sin_theta
@@ -132,7 +114,7 @@ class RefsIndex:
 
 def build_index(vects, num_refs=5):
     ref_neighbors = {}   # reference pts -> neighbors
-    ref_weights = Weights()    # (ref_ord, vect_ord) -> float
+    ref_weights = WeightsArray()    # (ref_ord, vect_ord) -> float
 
     refs = np.zeros((num_refs, vects.shape[1]))
 
@@ -168,12 +150,46 @@ def load_index(filename='index.pkl'):
         return pickle.load(f)
 
 
-def main():
+def test_index_build():
+    """Test run of the index build."""
     sentences, vects = load_sentences()
-    refs_index = build_index(vects, num_refs=10000)
-    with open('index.pkl', 'wb') as f:
-        pickle.dump(refs_index, f)
+    refs_index1 = build_index(vects, num_refs=10)
+    refs_index2 = build_index(vects, num_refs=10)
+    refs_index3 = build_index(vects, num_refs=10)
+
+    refs_index1.merge(refs_index2)
+    refs_index1.merge(refs_index3)
+
+    copied_15 = refs_index1.weights_of(15)
+    orig_5 = refs_index2.weights_of(5)
+    assert copied_15 == orig_5
+
+    copied_25 = refs_index1.weights_of(25)
+    orig_5 = refs_index3.weights_of(5)
+    assert copied_25 == orig_5
+
+    assert (refs_index1.refs[25] == refs_index3.refs[5]).all()
+
+
+def main(refs=10000):
+    sentences, vects = load_sentences()
+
+    refs_per_round = 200
+    refs_index = None
+    for i in range(0, refs, refs_per_round):
+        new_refs_index = build_index(vects, num_refs=refs_per_round)
+
+        if refs_index is None:
+            refs_index = new_refs_index
+        else:
+            refs_index.merge(new_refs_index)
+
+        print(f"{i} - Dumping size {len(refs_index.refs)} refs index")
+
+        with open(f"index_{i}.pkl", 'wb') as f:
+            pickle.dump(refs_index, f)
 
 
 if __name__ == '__main__':
-    main()
+    # test_index_build()
+    main(int(argv[1]))

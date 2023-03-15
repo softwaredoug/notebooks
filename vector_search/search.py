@@ -1,11 +1,10 @@
-from index import RefsIndex, Weights, load_index  # noqa: F401
+from index import RefsIndex, load_index  # noqa: F401
 from sys import argv
 from sentence_transformers import SentenceTransformer
 model = SentenceTransformer('all-MiniLM-L6-v2')
 
 
-def search(query, at=10, reweight=True):
-    index = load_index()
+def search(index, query, at=10, reweight=True):
     query_vector = model.encode(query)
     return index.search(query_vector, at=at, reweight=reweight)
 

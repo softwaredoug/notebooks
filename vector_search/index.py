@@ -1,6 +1,8 @@
 import numpy as np
 import pickle
 from sys import argv
+import os.path
+import glob
 from time import perf_counter
 from refs_index import RefsIndex
 # All data - quite large for the entire set
@@ -78,11 +80,17 @@ def test_index_build():
     assert (refs_index1.refs[25] == refs_index3.refs[5]).all()
 
 
-def main(refs=10000):
+def main(refs=10000, last_file=None):
     sentences, vects = load_sentences()
 
+    start_ref = 0
     refs_per_round = 200
     refs_index = None
+    if last_file is not None:
+        with open(last_file, 'rb') as f:
+            refs_index = pickle.load(f)
+            start_ref = len(refs_index)
+
     start = perf_counter()
     for i in range(0, refs, refs_per_round):
         new_refs_index = build_index(vects, num_refs=refs_per_round)
@@ -92,12 +100,15 @@ def main(refs=10000):
         else:
             refs_index.merge(new_refs_index)
 
-        print(f"{i+refs_per_round} - Dumping size {len(refs_index.refs)} -- {perf_counter() - start}")
+        file_num = i + refs_per_round + start_ref
+        print(f"{file_num} - Dumping size {len(refs_index.refs)} -- {perf_counter() - start}")
 
-        with open(f"index_{i+refs_per_round}.pkl", 'wb') as f:
+        with open(f"index_{file_num}.pkl", 'wb') as f:
             pickle.dump(refs_index, f)
 
 
 if __name__ == '__main__':
-    # test_index_build()
-    main(int(argv[1]))
+    last_file = None
+    if len(argv) > 2:
+        last_file = argv[2]
+    main(int(argv[1]), last_file)

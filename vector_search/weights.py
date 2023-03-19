@@ -23,8 +23,8 @@ class WeightsArray:
     def __len__(self):
         return self.size
 
-    def _get_buffer(self):
-        return np.zeros(1000, dtype=np.float32)
+    def _get_buffer(self, size=1000):
+        return np.zeros(size, dtype=np.float32)
 
     def _track_rows(self, row):
         assert row >= len(self.rows) - 1
@@ -37,13 +37,16 @@ class WeightsArray:
         """Append with increasing row and col values."""
         self._track_rows(row)
         if self.size == len(self.data):
-            self.data = np.append(self.data, self._get_buffer())
+            new_buffer_size = max(1000, len(self.data) // 3)
+            self.data = np.append(self.data, self._get_buffer(size=new_buffer_size))
         self.data[self.size] = value
         self.size += 1
 
     def append_many(self, row: int, values: np.ndarray):
         self._track_rows(row)
-        self.data = np.append(self.data[:self.size], values)
+        while (self.size + len(values)) > len(self.data):
+            self.data = np.append(self.data, self._get_buffer())
+        self.data[self.size:self.size+len(values)] = values
         self.size += len(values)
 
     def merge(self, other):

@@ -1,8 +1,6 @@
 import numpy as np
 import pickle
 from sys import argv
-import os.path
-import glob
 from time import perf_counter
 from refs_index import RefsIndex
 # All data - quite large for the entire set

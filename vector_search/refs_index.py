@@ -5,6 +5,7 @@ from time import perf_counter
 from pyroaring import BitMap
 from project import project
 from weights import WeightsArray
+from projection_between import projection_between
 
 
 def centroid(vects):
@@ -28,6 +29,18 @@ def _most_similar(vects, centroid, floor):
     return bm, nn[idx_above_thresh]
 
 
+def warm(index, vects, n, specificity=0.25):
+    """Sample n random vectors and put them in the index."""
+    refs = np.zeros((n, vects.shape[1]))
+    for ref_idx in range(0, n):
+        idxs = np.random.randint(0, len(vects), 2)
+        vect1 = vects[idxs[0], :]
+        vect2 = vects[idxs[1], :]
+        proj = projection_between(vect1, vect2)
+        refs[ref_idx, :] = proj
+    index.add_refs(refs, vects, specificity=specificity)
+
+
 class RefsIndex:
 
     def __init__(self, dims: int):
@@ -45,7 +58,7 @@ class RefsIndex:
         for ref_idx, neighbors in other.neighbors.items():
             self.neighbors[ref_idx + start_row] = neighbors
 
-    def weights_of(self, ref, multiplier=1.0, n=None):
+    def weights_of(self, ref, multiplier=1.0, n=None, explain_others=[]):
         """Weights of all ref's neighbors, multiply score by multiplier."""
         weights = np.copy(self.weights.weights_of(ref))
         cols = self.neighbors[ref]
@@ -59,7 +72,13 @@ class RefsIndex:
             neighbors = [neighbors[int(k)] for k in keep]
             return Counter(dict(zip(neighbors, weights)))
 
-        return Counter(dict(zip(self.neighbors[ref], weights)))
+        as_dict = dict(zip(self.neighbors[ref], weights))
+        for curr_id, vect in explain_others:
+            try:
+                print(as_dict[curr_id])
+            except KeyError:
+                pass
+        return Counter(as_dict)
 
     def _append_new_refs(self, refs):
         if self.refs is not None:
@@ -72,6 +91,14 @@ class RefsIndex:
             return 0
         return len(self.refs)
 
+    # Notes on specificity and the number of refs
+    #
+    # You need a lot of query-time refs when searching when specificity is low,
+    # this is because you're triangulating in many dimensions, and need to
+    # get lots of data points
+    #
+    # However if specificity is high (ie very parallel to the indexed docs)
+    # then the hope is you index MANY refs, BUT you find fewer refs parallel
     def add_refs(self, refs, vects, specificity=0.1):
         start_ref_ord = len(self)
         self._append_new_refs(refs)
@@ -81,10 +108,12 @@ class RefsIndex:
             bit_set, dot_prods = _most_similar(vects, ref, specificity)
             self.weights.append_many(ref_ord, dot_prods)
             self.neighbors[ref_ord] = bit_set
-            if ref_ord % 10 == 0:
-                print(f"{ref_ord} - {perf_counter() - start}")
+            if ref_ord % 1 == 0:
+                print(f"{ref_ord} - {len(bit_set)} - {perf_counter() - start}")
 
-    def search(self, query_vector, ref_points=10, at=10, reweight=True):
+    def search(self, query_vector,
+               ref_points=10, at=10, reweight=True,
+               explain_others=[]):
         # query vect -> refs similarity
         nn = np.dot(self.refs, query_vector)
 
@@ -99,6 +128,7 @@ class RefsIndex:
 
         # Top ref candidates via our index
         candidates = Counter()
+        occurences = Counter()
         sin_theta = 1.0
         refs_so_far = []
         for ref_ord, ref_score in zip(top_n_ref_points, scored):
@@ -110,17 +140,35 @@ class RefsIndex:
                 angle = math.acos(dot)
                 sin_theta = math.sin(angle)
 
-            ref_candidates = self.weights_of(ref_ord, multiplier=ref_score*sin_theta)
+            ref_candidates = self.weights_of(ref_ord,
+                                             multiplier=ref_score*sin_theta)
+
+            for curr_id, vect in explain_others:
+                to_idx_dotted = np.dot(self.refs[ref_ord], vect)
+                to_query_dotted = np.dot(self.refs[ref_ord], query_vector)
+                weight = ref_candidates.get(curr_id)
+                if weight is not None:
+                    print(f"{curr_id},{ref_ord} -- {to_query_dotted},{to_idx_dotted} -- ({weight}, {ref_score}, {sin_theta})")
+                else:
+                    print(f"{curr_id},{ref_ord} -- {to_query_dotted},{to_idx_dotted}")
 
             # This line is the bottleneck
             candidates += ref_candidates
+            occurences += Counter(ref_candidates.keys())
 
             refs_so_far.append(self.refs[ref_ord])
 
         results = candidates.items()
-        return sorted(results,
-                      key=lambda scored: scored[1],
-                      reverse=True)[:at]
+
+        for curr_id, _ in explain_others:
+            print(curr_id, candidates[curr_id], occurences[curr_id])
+
+        results = sorted(results,
+                         key=lambda scored: scored[1],
+                         reverse=True)[:at]
+        with_occurences = [(result[0], result[1],
+                            occurences[result[0]]) for result in results]
+        return with_occurences
 
 
 def test_indexing():

@@ -18,16 +18,16 @@ def main(queries):
     sentences, vects = load_sentences()
     print("Loading index...")
     index = load_index('.old/index_8000.pkl')
-    print("Warming...")
-    warmed(index, vects, n=100)
-    print(f"Warmed... {len(vects)}")
+    # print("Warming...")
+    # warmed(index, vects, n=100)
+    # print(f"Warmed... {len(vects)}")
     for query in queries:
         results = search(index, vects, query, at=10,
-                         ref_points=10, reweight=True,
+                         ref_points=100, reweight=True,
                          as_ref=False)
         results_gt = search_ground_truth(vects, query, at=10)
 
-        results = set([idx for idx, result in results])
+        results = set([idx for idx, result, _ in results])
         results_gt = set([idx for idx, result in results_gt])
 
         print(query, len(results & results_gt))
